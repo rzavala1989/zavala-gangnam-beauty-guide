@@ -27,7 +27,7 @@ from bs4 import BeautifulSoup
 
 BASE = "https://gangnambeautyguide.com"
 INDEX = f"{BASE}/en/clinics/"
-SESSION = requests.Session()                                   # keep-alive: one host, ~140 requests
+SESSION = requests.Session()
 SESSION.headers["User-Agent"] = "gbg-syndication/1.0 (+contact@example.com)"
 
 # ---- storage / idempotency (sqlite: durable, safe to re-run) -----------------
