@@ -4,7 +4,7 @@
 
 ## Verifying changes
 
-`.venv/bin/python main.py --dry-run` hits the live index and prints one row per clinic (139 as of July 2026). It must need no API key and must not create `gbg.db`. For logic changes, drive `process_clinic` or `sync` against an in-memory db (`main.db(":memory:")`) with `main.fetch` monkeypatched; no network or LLM required.
+`.venv/bin/python -m pytest -q` runs the offline suite in `test_main.py`: canned index cards, monkeypatched `main.fetch`, in-memory sqlite, no network or LLM. Every invariant below has a test there; a change that breaks one is wrong until proven otherwise. `.venv/bin/python main.py --dry-run` is the live check: it hits the real index and prints one row per clinic (139 as of July 2026), needs no API key, and must not create `gbg.db`.
 
 ## Invariants to preserve
 

@@ -4,3 +4,4 @@ __pycache__/
 gbg.db
 impls.py
 .impeccable/
+.pytest_cache/
