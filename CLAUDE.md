@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-`main.py` is a self-contained review syndication pipeline for gangnambeautyguide.com. README.md covers how it works; this file records what the code can't tell you.
+`main.py` is a self-contained review syndication pipeline for gangnambeautyguide.com. README.md covers how it works. This file is the standing contract for coding agents working in this repo: the invariants an edit must preserve, how to prove it preserved them, and the live-site facts a fresh session would otherwise rediscover the hard way.
 
 ## Verifying changes
 

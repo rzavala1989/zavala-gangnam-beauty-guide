@@ -29,6 +29,16 @@ The judgment that matters more than the code:
 - Automation is gated by reversibility. A translation is cheap to undo, so it auto-publishes. A "verified" badge or an entity merge is not, so it needs registry proof and an audit row.
 - Human corrections stick. The clinic upsert never overwrites a name a person has fixed, and a repaired name is flagged once, on first sight.
 
+## Where the agents sit
+
+The LLM is boxed in behind three seams (`extract`, `translate`, `verify`), and every output crosses a boundary the model doesn't control:
+
+- Extraction is schema-validated into `RawReview` records, and the prompt mandates blank fields over guesses; a guessed surgeon name would attach a real review to the wrong person.
+- Translation is pinned to the procedure glossary, and the Korean original is stored beside the English, which keeps the one fully automated publish step reversible.
+- Identity and trust are never the model's call: slugs and text hashes decide dedup, the license registry decides "verified", and anything unconfirmable routes to the `hitl` queue for a person.
+
+The same discipline governs how the repo is maintained. [CLAUDE.md](CLAUDE.md) is the standing contract for coding agents: the invariants an edit must preserve and a no-network harness for proving it did. The code was written with Claude Code, put through a multi-agent review (parallel finders, then an independent adversarial verifier per finding), and every surviving finding was fixed and re-verified against the live site.
+
 ## Wiring impls.py
 
 The full sync imports `YourLLM` and `registry` from `impls.py`:
@@ -52,5 +62,3 @@ SQLite (`gbg.db`), five tables:
 - `review`: published reviews, Korean original beside the English translation
 - `hitl`: the human review queue (repaired names, unconfirmable surgeons)
 - `audit`: every publish and every per-clinic error
-
-Guidance for working on this repo with Claude Code lives in [CLAUDE.md](CLAUDE.md).
