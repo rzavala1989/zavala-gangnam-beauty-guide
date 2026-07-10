@@ -5,7 +5,8 @@
 #  - The slug from the SSR index IS clinic identity. We never fuzzy-merge clinics
 #    on romanized names (the data proved the trap: "OZ" collisions, names that
 #    parse as "(2,767)"). Deterministic key first; the model only ever proposes.
-#  - Idempotent on (url, content_hash): re-running never double-publishes.
+#  - Idempotent on (url, content_hash); review identity is (slug, text hash),
+#    so metadata drift (a relative date going absolute) never re-publishes.
 #  - Gated by reversibility: a translation is cheap to undo -> auto-publish.
 #    A "verified" badge or an entity merge is not -> needs registry proof and audit.
 
@@ -80,13 +81,15 @@ class Verdict:
     site_flag: bool
 
 # ---- step 1: parse the SSR index (no API, no pagination, 139 rows) ----------
-NUMERIC = re.compile(r"^\(?[\d,]+\)?$")
+NUMERIC = re.compile(r"^[\d,.()]+$")   # count/rating fragments: "(", "2,767", ")", "4.5"
 
 def parse_index(html: bytes) -> list[Clinic]:
     soup, seen, out = BeautifulSoup(html, "html.parser"), set(), []
     for a in soup.select('a[href*="/clinics/"]'):
-        slug = a.get("href", "").split("?")[0].rstrip("/").rsplit("/", 1)[-1]
-        if not slug or slug == "clinics" or slug in seen:
+        parts = [p for p in a.get("href", "").split("?")[0].split("#")[0].split("/") if p]
+        i = parts.index("clinics") if "clinics" in parts else -1
+        slug = parts[i + 1] if 0 <= i < len(parts) - 1 else ""  # fragment/subpath-proof
+        if not slug or slug in seen:
             continue
         seen.add(slug)
         lines = [ln.strip() for ln in a.get_text("\n").split("\n") if ln.strip()]
@@ -95,7 +98,7 @@ def parse_index(html: bytes) -> list[Clinic]:
         needs = not raw or NUMERIC.match(raw) is not None      # the "(2,767)" name bug
         name = slug.replace("-", " ").title() if needs else raw
         t = " ".join(lines)
-        rating = float(m.group(1)) if (m := re.search(r"\b([1-5]\.\d)\b", t)) else None
+        rating = float(m.group(1)) if (m := re.search(r"★\s*([1-5]\.\d)\b", t)) else None
         reviews = int(m.group(1).replace(",", "")) if (m := re.search(r"\(\s*([\d,]+)\s*\)", t)) else None
         district = m.group(1) if (m := re.search(r"([A-Za-z]+-gu)", t)) else None
         out.append(Clinic(slug, name, rating, reviews, district, "verified" in t.lower(), needs))
@@ -113,43 +116,56 @@ def process_clinic(c, slug, extract, translate, verify):
     if unchanged(c, url, body):                                # page unchanged -> skip
         return
     for r in extract(body):                                    # step 3: LLM structured extract
-        rid = hashlib.sha256(f"{slug}|{r.surgeon}|{r.procedure}|{r.dt}".encode()).hexdigest()
-        dup = c.execute("SELECT 1 FROM review WHERE slug=? AND surgeon=? AND procedure=? AND dt=?",
-                        (slug, r.surgeon, r.procedure, r.dt)).fetchone()
-        if dup:                                                # step 5: same review, syndicated
-            continue
+        # Identity is (slug, normalized text): the body is the one field the
+        # extractor can never leave blank, so two anonymous reviews can't
+        # collide and metadata drift (a relative date going absolute, a surgeon
+        # name appearing later) can't mint a duplicate. An edited review is a
+        # new review by design; \x00 can't occur in page text, so the join
+        # can't be gamed the way "|" inside a name could.
+        text_norm = " ".join(r.text_ko.split())
+        rid = hashlib.sha256(f"{slug}\x00{text_norm}".encode()).hexdigest()
+        if c.execute("SELECT 1 FROM review WHERE id=?", (rid,)).fetchone():
+            continue                                           # step 5: text already published
+        proc = PROCEDURE_GLOSSARY.get(r.procedure.strip(), r.procedure.strip())
         en = translate(r.text_ko)                              # step 4: KO->EN, reversible -> auto
-        v: Verdict = verify(r.surgeon, slug)                   # step 6: cross-check license registry
-        if not v.confirmed and v.site_flag:                    # site says verified, registry can't
-            flag(c, "verify_surgeon", slug, r.surgeon)         #   -> human; never trust flag blind
+        v: Verdict = verify(r.surgeon, slug) if r.surgeon else Verdict(False, False)
+        if r.surgeon and not v.confirmed and v.site_flag:      # step 6: site says verified,
+            flag(c, "verify_surgeon", slug, r.surgeon)         # registry can't -> human decides
         c.execute("INSERT OR IGNORE INTO review VALUES(?,?,?,?,?,?,?,?)",
-                  (rid, slug, r.surgeon, r.procedure, r.dt, r.text_ko, en, int(v.confirmed)))
+                  (rid, slug, r.surgeon, proc, r.dt, r.text_ko, en, int(v.confirmed)))
         audit(c, "publish_review", slug, rid)
     checkpoint(c, url, body)                                   # step 7: commit only after full pass
-    c.commit()
 
 def sync(c, extract, translate, verify):
     body = fetch(INDEX)                                         # step 1: one SSR fetch
+    clinics = parse_index(body)
     if not unchanged(c, INDEX, body):
-        for cl in parse_index(body):
-            c.execute("INSERT OR REPLACE INTO clinic VALUES(?,?,?,?,?,?,?)",
+        for cl in clinics:
+            known = c.execute("SELECT 1 FROM clinic WHERE slug=?", (cl.slug,)).fetchone()
+            # Upsert never touches name or name_needs_review on existing rows:
+            # a human-corrected name survives every re-crawl of the index.
+            c.execute("""INSERT INTO clinic VALUES(?,?,?,?,?,?,?)
+                         ON CONFLICT(slug) DO UPDATE SET rating=excluded.rating,
+                           reviews=excluded.reviews, district=excluded.district,
+                           verified=excluded.verified""",
                       (cl.slug, cl.name, cl.rating, cl.reviews, cl.district,
                        int(cl.verified), int(cl.name_needs_review)))
-            if cl.name_needs_review:
-                flag(c, "clinic_name", cl.slug, cl.name)       # repaired name -> confirm before live
+            if cl.name_needs_review and not known:
+                flag(c, "clinic_name", cl.slug, cl.name)       # flag once, on first sight
         checkpoint(c, INDEX, body)
-        c.commit()
-    rows = c.execute("SELECT slug FROM clinic ORDER BY reviews IS NULL, reviews DESC").fetchall()
-    for (slug,) in rows:                                       # step 2: fan out, biggest first
+    # Fan out over the live index, not the clinic table: delisted clinics keep
+    # their published rows but stop being crawled.
+    for cl in sorted(clinics, key=lambda x: -(x.reviews or 0)):  # step 2: biggest first
         try:
-            process_clinic(c, slug, extract, translate, verify)  # in prod: a Temporal activity
+            process_clinic(c, cl.slug, extract, translate, verify)  # in prod: a Temporal activity
         except Exception as e:                                 # one clinic failing never stops the run
-            audit(c, "error", slug, str(e))
+            audit(c, "error", cl.slug, str(e))
             c.commit()
 
 # ---- prompts: the model proposes, deterministic keys decide ------------------
-# Glossary pins the English procedure vocabulary. Search and the dedup key both
-# depend on "코재수술" landing on the same string every run, not a synonym.
+# Glossary pins the English procedure vocabulary: process_clinic maps the stored
+# procedure field through it and TRANSLATE_PROMPT applies it inside review
+# bodies, so "쌍수" and "쌍꺼풀" land on one searchable string.
 PROCEDURE_GLOSSARY = {
     "쌍꺼풀":        "double eyelid surgery",
     "쌍수":          "double eyelid surgery",
@@ -182,8 +198,8 @@ Rules, in priority order:
    Korean included. Do not translate, normalize, or expand abbreviations here;
    normalization happens downstream against a license registry.
 2. Never guess. Review names no surgeon -> surgeon is "". No procedure stated
-   -> procedure is "". These fields feed the dedup key; a guessed value
-   publishes the same review twice under two identities.
+   -> procedure is "". A guessed name attaches a real patient review to the
+   wrong surgeon, the one failure this pipeline exists to prevent.
 3. dt is an ISO date (YYYY-MM-DD) only when the page prints an absolute date.
    Relative dates ("3주 전") become "": you do not know today's date.
 4. text_ko is the full review body, untruncated. Skip everything that is not a
@@ -214,8 +230,7 @@ def real_extract(llm) -> Callable[[bytes], Iterable[RawReview]]:
     return extract
 
 if __name__ == "__main__":
-    conn = db()
-    if "--dry-run" in sys.argv:                                # proves the seed layer runs, no key
+    if "--dry-run" in sys.argv:                                # seed layer only: no key, no db
         for cl in parse_index(fetch(INDEX)):
             print(f"{cl.slug:28} | {cl.name:34} | {cl.rating} | {cl.reviews} | "
                   f"{cl.district} | needs_review={cl.name_needs_review}")
@@ -224,6 +239,7 @@ if __name__ == "__main__":
             from impls import YourLLM, registry                # <- wire real impls in impls.py
         except ImportError:
             raise SystemExit("no impls.py: define YourLLM (json/text) and registry (check)")
+        conn = db()
         llm = YourLLM()
 
         def translate(ko: str) -> str:
