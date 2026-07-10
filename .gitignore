@@ -3,3 +3,4 @@ __pycache__/
 .idea/
 gbg.db
 impls.py
+.impeccable/
