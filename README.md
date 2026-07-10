@@ -1,13 +1,13 @@
 # Gangnam Beauty Guide review pipeline
 
-Single-file pipeline (`gbg.py`) that turns Korean patient reviews from [gangnambeautyguide.com](https://gangnambeautyguide.com/en/) into a searchable English dataset. It seeds from one server-rendered fetch of the clinic index (139 clinics, no API), then crawls each clinic page to extract, translate, dedupe, and trust-gate reviews.
+Single-file pipeline (`main.py`) that turns Korean patient reviews from [gangnambeautyguide.com](https://gangnambeautyguide.com/en/) into a searchable English dataset. It seeds from one server-rendered fetch of the clinic index (139 clinics, no API), then crawls each clinic page to extract, translate, dedupe, and trust-gate reviews.
 
 ## Run
 
 ```bash
 pip install requests beautifulsoup4
-python gbg.py --dry-run    # parse the live index, print every clinic; no API key, no database
-python gbg.py              # full sync; requires impls.py (see wiring below)
+python main.py --dry-run   # parse the live index, print every clinic; no API key, no database
+python main.py             # full sync; requires impls.py (see wiring below)
 ```
 
 ## Pipeline

@@ -1,15 +1,15 @@
 # CLAUDE.md
 
-`gbg.py` is a self-contained review syndication pipeline for gangnambeautyguide.com. README.md covers how it works; this file records what the code can't tell you.
+`main.py` is a self-contained review syndication pipeline for gangnambeautyguide.com. README.md covers how it works; this file records what the code can't tell you.
 
 ## Verifying changes
 
-`.venv/bin/python gbg.py --dry-run` hits the live index and prints one row per clinic (139 as of July 2026). It must need no API key and must not create `gbg.db`. For logic changes, drive `process_clinic` or `sync` against an in-memory db (`gbg.db(":memory:")`) with `gbg.fetch` monkeypatched; no network or LLM required.
+`.venv/bin/python main.py --dry-run` hits the live index and prints one row per clinic (139 as of July 2026). It must need no API key and must not create `gbg.db`. For logic changes, drive `process_clinic` or `sync` against an in-memory db (`main.db(":memory:")`) with `main.fetch` monkeypatched; no network or LLM required.
 
 ## Invariants to preserve
 
 - Review identity is (slug, whitespace-normalized text hash), joined with `\x00`. Do not add surgeon, procedure, or date back into the key: empty-string fields collide anonymous reviews, and drifting fields re-publish the same review.
-- The clinic upsert never updates `name` or `name_needs_review` on existing rows. Human corrections have to survive re-crawls, and a repaired name is flagged to `hitl` only on first sight.
+- The clinic upsert never updates `name` or `name_needs_review` on existing rows. Human corrections have to survive re-crawls. Flag once-ness lives in the `hitl` primary key (kind, slug, payload), never in caller bookkeeping.
 - Fan-out iterates the freshly parsed index, never the clinic table, so delisted clinics stop being crawled but keep their published rows.
 - `verify()` is skipped for anonymous reviews; an empty surgeon must never reach the registry or the hitl queue.
 
