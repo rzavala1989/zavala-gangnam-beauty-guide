@@ -5,7 +5,7 @@ Single-file pipeline (`main.py`) that turns Korean patient reviews from [gangnam
 ## Run
 
 ```bash
-pip install requests beautifulsoup4
+pip install -r requirements.txt
 python main.py --dry-run   # parse the live index, print every clinic; no API key, no database
 python main.py             # full sync; requires impls.py (see wiring below)
 python -m pytest -q        # offline suite: canned HTML, monkeypatched fetch, no network or LLM
